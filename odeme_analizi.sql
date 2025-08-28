@@ -22,6 +22,7 @@ SELECT
     pay.corporate_id, 
     round((pay.payment_amount * pay.rate), 2) AS odeme_miktari_tl, 
     pay.currency as para_birim_id, 
+	cur.exchange as para_birimi,
     pay.rate as doviz_kuru,
     pay.payment_amount as odeme_miktari,
     pay.payment_method as odeme_tipi_id, 
@@ -55,6 +56,7 @@ LEFT JOIN nationality_types nt ON nt.id = p.nationality_type
 LEFT JOIN hdyhau h ON h.id = p.hdyhau
 LEFT JOIN users usv ON usv.id = p.saved_by 
 LEFT JOIN users upay ON upay.id = pay.saved_by 
+LEFT JOIN currency cur ON cur.id = pay.currency
 WHERE 
     pay.is_deleted = 0
     AND pay.is_refund = 0
