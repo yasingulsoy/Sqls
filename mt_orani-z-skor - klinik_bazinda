@@ -1,0 +1,86 @@
+/* Parametreler:
+   :start_dt     = '2025-08-14 00:00:00'
+   :end_next_dt  = '2025-09-01 00:00:00'
+   :clinic_id    = NULL       -- klinikler arası kıyas için NULL bırakın
+   :min_n        = NULL
+*/
+
+WITH t_norm AS (
+  SELECT t.*,
+         COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts
+  FROM treatments t
+  WHERE t.is_deleted = 0
+),
+exams AS (
+  SELECT e.id AS exam_id,
+         e.patient_id,
+         e.clinic_id,
+         e.doctor_id   AS exam_doctor_id,
+         e.service_ts  AS exam_ts
+  FROM t_norm e
+  WHERE e.is_examination = 1
+    AND e.treatment_type = 3
+    AND e.service_ts >= :start_dt
+    AND e.service_ts <  :end_next_dt
+    AND (:clinic_id IS NULL OR e.clinic_id = :clinic_id)
+),
+followups AS (
+  SELECT ex.exam_id, t.id AS treatment_id
+  FROM exams ex
+  JOIN t_norm t
+    ON t.is_examination = 0
+   AND t.is_done        = 1
+   AND t.treatment_type = 3
+   AND t.patient_id     = ex.patient_id
+   AND t.service_ts     > ex.exam_ts
+   AND t.service_ts    <= ex.exam_ts + INTERVAL 30 DAY
+),
+exam_flags AS (
+  SELECT ex.exam_id,
+         ex.clinic_id,
+         CASE WHEN COUNT(fu.treatment_id) > 0 THEN 1 ELSE 0 END AS converted_flag
+  FROM exams ex
+  LEFT JOIN followups fu ON fu.exam_id = ex.exam_id
+  GROUP BY ex.exam_id, ex.clinic_id
+),
+/* Klinik bazında O ve N */
+by_clinic AS (
+  SELECT ef.clinic_id,
+         COUNT(*)               AS exam_count,            -- N
+         SUM(ef.converted_flag) AS converted_exam_count   -- O
+  FROM exam_flags ef
+  GROUP BY ef.clinic_id
+),
+/* Genel g */
+totals AS (
+  SELECT SUM(converted_exam_count) / NULLIF(SUM(exam_count),0) AS global_mean_p
+  FROM by_clinic
+)
+SELECT
+  c.id   AS clinic_id,
+  c.clinic_name,
+
+  bc.exam_count           AS N_muayene,
+  bc.converted_exam_count AS O_donusen,
+
+  ROUND(100.0 * bc.converted_exam_count / NULLIF(bc.exam_count,0), 2) AS raw_rate_pct,
+
+  ROUND(bc.exam_count * t.global_mean_p, 2) AS E_beklenen,
+
+  ROUND(bc.converted_exam_count / NULLIF(bc.exam_count * t.global_mean_p,0), 3) AS OE_ratio,
+  ROUND(bc.converted_exam_count - (bc.exam_count * t.global_mean_p), 2)         AS OE_diff,
+
+  CASE
+    WHEN bc.exam_count > 0 AND t.global_mean_p > 0 AND t.global_mean_p < 1
+      THEN ROUND(
+        (bc.converted_exam_count - (bc.exam_count * t.global_mean_p))
+        / SQRT(bc.exam_count * t.global_mean_p * (1 - t.global_mean_p))
+      , 3)
+    ELSE NULL
+  END AS z_score
+
+FROM by_clinic bc
+CROSS JOIN totals t
+LEFT JOIN clinics c ON c.id = bc.clinic_id
+WHERE (:min_n IS NULL OR bc.exam_count >= :min_n)
+ORDER BY z_score DESC, OE_ratio DESC, N_muayene DESC, clinic_name;
