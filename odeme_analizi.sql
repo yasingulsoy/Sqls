@@ -1,7 +1,7 @@
 SELECT 
     pay.id, 
     pay.patient_id, 
-    pay.payment_date as odeme_tarihi, 
+    date(pay.payment_date) as odeme_tarihi, 
     c.id AS sube_id, 
     c.clinic_name as sube_adi, 
     psc.id as ak_id,
@@ -44,7 +44,9 @@ SELECT
     usv.id as hastayi_kayit_eden_id,
     CONCAT(usv.first_name, ' ', usv.last_name) AS hastayi_kayit_eden_adi,
     upay.id as odeme_kayit_eden_id,
-    CONCAT(upay.first_name, ' ', upay.last_name) AS odeme_kayit_eden_adi    
+    CONCAT(upay.first_name, ' ', upay.last_name) AS odeme_kayit_eden_adi,
+	co.country_name as uyruk,
+	co2.country_name as ulke
 FROM payments pay 
 LEFT JOIN clinics c ON pay.clinic_id = c.id
 LEFT JOIN patients p ON pay.patient_id = p.id
@@ -57,19 +59,21 @@ LEFT JOIN hdyhau h ON h.id = p.hdyhau
 LEFT JOIN users usv ON usv.id = p.saved_by 
 LEFT JOIN users upay ON upay.id = pay.saved_by 
 LEFT JOIN currency cur ON cur.id = pay.currency
+LEFT JOIN countries co ON co.id = p.nationality
+LEFT JOIN countries co2 ON co2.id = p.p_country
 WHERE 
     pay.is_deleted = 0
-    AND pay.is_refund = 0
-    AND pay.is_refunded = 0
+    AND (pay.is_payment = 1 OR pay.is_refund = 1)
     AND (:has_clinic_id = 0 OR pay.clinic_id IN (:clinic_id))
-    AND (:has_payment_method_id = 0 OR pay.payment_method IN (:payment_method_id))
+	AND (:has_country_id = 0 OR p.nationality IN (:country_id))
+    AND (:has_address_country_id = 0 OR p.p_country IN (:address_country_id))
+	AND (:has_payment_method_id = 0 OR pay.payment_method IN (:payment_method_id))
 	AND (:has_partnership_company_id = 0 OR p.partnership_companies IN (:partnership_company_id))
     AND (:has_start_date = 0 OR pay.payment_date >= :start_date)
     AND (:has_end_date   = 0 OR pay.payment_date <= :end_date)
     AND (:has_company_type = 0 
          OR psc.company_type IN (:company_type) 
-         OR (psc.company_type IS NULL AND 'null' IN (:company_type)));
+         OR (psc.company_type IS NULL AND 'null' IN (:company_type)))
    AND (:has_nationality_types_id   = 0 OR p.nationality_type IN (:nationality_types_id))
    AND (:has_hdyhau_id              = 0 OR h.id IN (:hdyhau_id))   
-   AND (:has_payment_saved_by_id = 0 OR pay.saved_by IN (:payment_saved_by_id))  -- Ödemeyi Kayıt eden user
-   AND (:has_patient_saved_by_id = 0 OR p.saved_by IN (:patient_saved_by_id))  -- Hastayı Kayıt eden user  
+   AND (:has_user_id = 0 OR p.saved_by IN (:user_id))  -- Hastayı Kayıt eden user  
