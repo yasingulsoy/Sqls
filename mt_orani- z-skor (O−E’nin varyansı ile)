@@ -1,0 +1,128 @@
+/* Parametreler:
+   :start_dt     = '2025-08-14 00:00:00'
+   :end_next_dt  = '2025-09-01 00:00:00'   -- bitiş gününün ertesi 00:00
+   :clinic_id    = NULL veya 2 (opsiyonel)
+   :min_n        = NULL veya 30  -- küçük örnekleri elemek istersen
+
+O = hekimin dönüşen muayene sayısı
+
+N = hekimin muayene sayısı
+
+g = tüm hekimlerde dönem geneli dönüşüm oranı = total_O / total_N
+
+E = beklenen dönüşen = N × g
+
+O/E = gözlenen / beklenen (1.00 üstü beklenenden iyi)
+
+(Not: Vaka karması olmadığında “standartlaştırılmış oran” 
+(𝑂/𝐸)×𝑔
+(O/E)×g ham orana eşittir.)
+OE_ratio > 1 ve z_score büyük ⇒ genel ortalamaya göre anlamlı biçimde iyi performans.
+
+Çok küçük N’lerde z-skor güvenilir olmaz; bu yüzden :min_n eşiğini (ör. 30) kullanmanı öneririm.
+**/
+
+WITH t_norm AS (
+  SELECT
+    t.*,
+    COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts
+  FROM treatments t
+  WHERE t.is_deleted = 0
+),
+/* Muayeneler – is_done şartı yok */
+exams AS (
+  SELECT 
+      e.id          AS exam_id,
+      e.patient_id,
+      e.clinic_id,
+      e.doctor_id   AS exam_doctor_id,
+      e.service_ts  AS exam_ts
+  FROM t_norm e
+  WHERE e.is_examination = 1
+    AND e.treatment_type = 3
+    AND e.service_ts     >= :start_dt
+    AND e.service_ts     <  :end_next_dt
+    AND (:clinic_id IS NULL OR e.clinic_id = :clinic_id)
+),
+/* 30 gün içinde yapılan uygun tedaviler (is_done=1) */
+followups AS (
+  SELECT
+      ex.exam_id,
+      ex.exam_doctor_id,
+      ex.clinic_id,
+      t.id AS treatment_id
+  FROM exams ex
+  JOIN t_norm t
+    ON t.is_examination = 0
+   AND t.is_done        = 1
+   AND t.treatment_type = 3
+   AND t.patient_id     = ex.patient_id
+   AND t.service_ts     > ex.exam_ts
+   AND t.service_ts    <= ex.exam_ts + INTERVAL 30 DAY
+),
+/* Muayene bazında “dönüştü mü?” bayrağı */
+exam_flags AS (
+  SELECT
+      ex.exam_id,
+      ex.exam_doctor_id,
+      ex.clinic_id,
+      CASE WHEN COUNT(fu.treatment_id) > 0 THEN 1 ELSE 0 END AS converted_flag
+  FROM exams ex
+  LEFT JOIN followups fu ON fu.exam_id = ex.exam_id
+  GROUP BY ex.exam_id, ex.exam_doctor_id, ex.clinic_id
+),
+/* Doktor bazında O ve N */
+by_doctor AS (
+  SELECT
+    ef.exam_doctor_id        AS doctor_id,
+    ef.clinic_id,
+    COUNT(*)                 AS exam_count,            -- N
+    SUM(ef.converted_flag)   AS converted_exam_count   -- O
+  FROM exam_flags ef
+  GROUP BY ef.exam_doctor_id, ef.clinic_id
+),
+/* Genel (tüm hekimler) için g = total_O / total_N */
+totals AS (
+  SELECT
+    SUM(converted_exam_count)                        AS total_O,
+    SUM(exam_count)                                  AS total_N,
+    SUM(converted_exam_count) / NULLIF(SUM(exam_count),0) AS global_mean_p
+  FROM by_doctor
+)
+SELECT
+  u.id AS doctor_id,
+  CONCAT(u.first_name,' ',u.last_name) AS doctor_name,
+  c.clinic_name,
+  dbc.id   AS branch_id,
+  dbc.branch_name,
+
+  d.exam_count           AS N_muayene,
+  d.converted_exam_count AS O_donusen,
+
+  /* Ham dönüşüm oranı (%) */
+  ROUND(100.0 * d.converted_exam_count / NULLIF(d.exam_count,0), 2) AS raw_rate_pct,
+
+  /* Beklenen = N × g */
+  ROUND(d.exam_count * t.global_mean_p, 2) AS E_beklenen,
+
+  /* O/E ve farkı */
+  ROUND(d.converted_exam_count / NULLIF(d.exam_count * t.global_mean_p,0), 3) AS OE_ratio,
+  ROUND(d.converted_exam_count - (d.exam_count * t.global_mean_p), 2)         AS OE_diff,
+
+  /* z-skor: (O−E)/sqrt(N*p*(1−p)) */
+  CASE
+    WHEN d.exam_count > 0 AND t.global_mean_p > 0 AND t.global_mean_p < 1
+      THEN ROUND(
+        (d.converted_exam_count - (d.exam_count * t.global_mean_p))
+        / SQRT(d.exam_count * t.global_mean_p * (1 - t.global_mean_p))
+      , 3)
+    ELSE NULL
+  END AS z_score
+
+FROM by_doctor d
+CROSS JOIN totals t
+LEFT JOIN users u              ON u.id       = d.doctor_id
+LEFT JOIN clinics c            ON c.id       = d.clinic_id
+LEFT JOIN doctor_branch_codes dbc ON dbc.id  = u.doctor_branch_code
+WHERE (:min_n IS NULL OR d.exam_count >= :min_n)
+ORDER BY z_score DESC, OE_ratio DESC, d.exam_count DESC, doctor_name;
