@@ -1,0 +1,108 @@
+/* Parametreler:
+   :start_dt     = '2025-08-14 00:00:00'
+   :end_next_dt  = '2025-09-01 00:00:00'   -- üst sınır hariç
+   :clinic_id    = NULL        -- tüm klinikler için NULL bırakın
+   :min_n        = NULL        -- küçük örnekleri elemek için örn. 30 verilebilir
+*/
+
+WITH t_norm AS (
+  SELECT t.*,
+         COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts
+  FROM treatments t
+  WHERE t.is_deleted = 0
+),
+/* Muayeneler – is_done şartı YOK */
+exams AS (
+  SELECT e.id AS exam_id,
+         e.patient_id,
+         e.clinic_id,
+         e.doctor_id   AS exam_doctor_id,
+         e.service_ts  AS exam_ts
+  FROM t_norm e
+  WHERE e.is_examination = 1
+    AND e.treatment_type = 3
+    AND e.service_ts >= :start_dt
+    AND e.service_ts <  :end_next_dt
+    AND (:clinic_id IS NULL OR e.clinic_id = :clinic_id)
+),
+/* 30 gün içinde yapılan uygun tedaviler (is_done=1) */
+followups AS (
+  SELECT ex.exam_id, t.id AS treatment_id
+  FROM exams ex
+  JOIN t_norm t
+    ON t.is_examination = 0
+   AND t.is_done        = 1
+   AND t.treatment_type = 3
+   AND t.patient_id     = ex.patient_id
+   AND t.service_ts     > ex.exam_ts
+   AND t.service_ts    <= ex.exam_ts + INTERVAL 30 DAY
+),
+/* Muayene bazında “dönüştü mü?” */
+exam_flags AS (
+  SELECT ex.exam_id,
+         ex.exam_doctor_id,
+         ex.clinic_id,
+         CASE WHEN COUNT(fu.treatment_id) > 0 THEN 1 ELSE 0 END AS converted_flag
+  FROM exams ex
+  LEFT JOIN followups fu ON fu.exam_id = ex.exam_id
+  GROUP BY ex.exam_id, ex.exam_doctor_id, ex.clinic_id
+),
+/* Doktor bazında O ve N */
+by_doctor AS (
+  SELECT ef.exam_doctor_id AS doctor_id,
+         ef.clinic_id,
+         COUNT(*)               AS exam_count,            -- N
+         SUM(ef.converted_flag) AS converted_exam_count   -- O
+  FROM exam_flags ef
+  GROUP BY ef.exam_doctor_id, ef.clinic_id
+),
+/* Genel g = total_O / total_N */
+totals AS (
+  SELECT SUM(converted_exam_count) / NULLIF(SUM(exam_count),0) AS global_mean_p
+  FROM by_doctor
+),
+/* Doktor + Branş bağlama */
+doc_branch AS (
+  SELECT d.doctor_id,
+         d.clinic_id,
+         u.doctor_branch_code AS branch_id,
+         dbc.branch_name,
+         d.exam_count,
+         d.converted_exam_count
+  FROM by_doctor d
+  LEFT JOIN users u               ON u.id = d.doctor_id
+  LEFT JOIN doctor_branch_codes dbc ON dbc.id = u.doctor_branch_code
+)
+SELECT
+  b.branch_id,
+  COALESCE(b.branch_name, '—') AS branch_name,
+
+  SUM(b.exam_count)               AS N_muayene,
+  SUM(b.converted_exam_count)     AS O_donusen,
+
+  /* Ham oran (%) */
+  ROUND(100.0 * SUM(b.converted_exam_count) / NULLIF(SUM(b.exam_count),0), 2) AS raw_rate_pct,
+
+  /* Beklenen = N × g */
+  ROUND(SUM(b.exam_count) * t.global_mean_p, 2) AS E_beklenen,
+
+  /* O/E ve farkı */
+  ROUND(SUM(b.converted_exam_count) / NULLIF(SUM(b.exam_count) * t.global_mean_p,0), 3) AS OE_ratio,
+  ROUND(SUM(b.converted_exam_count) - (SUM(b.exam_count) * t.global_mean_p), 2)         AS OE_diff,
+
+  /* z-skor */
+  CASE
+    WHEN SUM(b.exam_count) > 0 AND t.global_mean_p > 0 AND t.global_mean_p < 1
+      THEN ROUND(
+        (SUM(b.converted_exam_count) - (SUM(b.exam_count) * t.global_mean_p))
+        / SQRT(SUM(b.exam_count) * t.global_mean_p * (1 - t.global_mean_p))
+      , 3)
+    ELSE NULL
+  END AS z_score
+
+FROM doc_branch b
+CROSS JOIN totals t
+WHERE (:min_n IS NULL OR b.exam_count >= :min_n)  -- istersen branş bazında toplam N için HAVING de kullanabilirsin
+GROUP BY b.branch_id, branch_name
+HAVING (:min_n IS NULL OR SUM(b.exam_count) >= :min_n)
+ORDER BY z_score DESC, OE_ratio DESC, N_muayene DESC, branch_name;
