@@ -75,5 +75,3 @@ WHERE
 	AND (:has_company_type = 0 
 	  	OR pc.company_type IN (:company_type) 
 	  	OR (pc.company_type IS NULL AND 'null' IN (:company_type)))
-  	AND (:has_price_group_category_treatments = 0 OR pgct.id IN (:has_price_group_category_treatments))
-  	AND (:has_price_group_subcategories = 0 OR pgs.id IN (:has_price_group_subcategories))
