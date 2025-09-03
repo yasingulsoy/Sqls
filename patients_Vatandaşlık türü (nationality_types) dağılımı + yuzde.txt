@@ -1,0 +1,16 @@
+SELECT
+  COALESCE(nt.type_name,'Bilinmiyor') AS vatandaslik_turu,
+  COUNT(*) AS cnt,
+  ROUND(100.0 * COUNT(*) / NULLIF((
+      SELECT COUNT(*) FROM patients p2
+      WHERE p2.isDeleted=0
+        AND p2.saved_on >= :start_dt AND p2.saved_on < :end_next_dt
+        AND (:clinic_id IS NULL OR p2.clinic_id = :clinic_id)
+  ),0), 2) AS pct
+FROM patients p
+LEFT JOIN nationality_types nt ON nt.id = p.nationality_type
+WHERE p.isDeleted=0
+  AND p.saved_on >= :start_dt AND p.saved_on < :end_next_dt
+  AND (:clinic_id IS NULL OR p.clinic_id = :clinic_id)
+GROUP BY vatandaslik_turu
+ORDER BY cnt DESC;

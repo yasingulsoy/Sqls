@@ -1,0 +1,28 @@
+/* Parametreler:
+   :start_dt     = '2025-08-01 00:00:00'
+   :end_next_dt  = '2025-09-01 00:00:00'   -- bitiş gününün ertesi 00:00
+   :clinic_id    = NULL veya bir şube id'si
+*/
+
+SELECT
+  COALESCE(c.country_name, 'Bilinmiyor') AS country_name,
+  p.p_country                             AS country_id,
+  COUNT(*)                                AS cnt,
+  ROUND(100.0 * COUNT(*) / NULLIF(t.total_cnt,0), 2) AS pct
+FROM patients p
+LEFT JOIN countries c
+       ON c.id = p.p_country
+CROSS JOIN (
+  SELECT COUNT(*) AS total_cnt
+  FROM patients p2
+  WHERE p2.isDeleted = 0
+    AND p2.saved_on >= :start_dt
+    AND p2.saved_on <  :end_next_dt
+    AND (:clinic_id IS NULL OR p2.clinic_id = :clinic_id)
+) t
+WHERE p.isDeleted = 0
+  AND p.saved_on >= :start_dt
+  AND p.saved_on <  :end_next_dt
+  AND (:clinic_id IS NULL OR p.clinic_id = :clinic_id)
+GROUP BY p.p_country, country_name
+ORDER BY cnt DESC, country_name;
