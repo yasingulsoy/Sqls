@@ -60,7 +60,6 @@ WHERE a.deleted_by = 0
   AND (:has_doctor_id = 0 OR a.doctor_id IN (:doctor_id))
   AND (:has_appointment_type = 0 OR a.appointment_type IN (:appointment_type))
   AND (:has_treatment_type = 0 OR a.treatment_type IN (:treatment_type))
-  AND (:has_is_confirmed = 0 OR a.is_confirmed IN (:is_confirmed))
   AND (:has_doctor_branch_code     = 0 OR dbc.id IN (:doctor_branch_code))
   AND (:has_nationality_types_id   = 0 OR p.nationality_type IN (:nationality_types_id))
   AND (:has_hdyhau_id              = 0 OR h.id IN (:hdyhau_id))
