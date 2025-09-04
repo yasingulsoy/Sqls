@@ -1,0 +1,39 @@
+/* Parametreler: :start_dt, :end_next_dt, :clinic_id (ops.), :doctor_id (ops.) */
+
+SELECT
+  u.id                              AS doctor_id,
+  CONCAT(u.first_name,' ',u.last_name) AS doctor_name,
+  c.id                              AS clinic_id,
+  c.clinic_name,
+  tn.patient_id,
+  CONCAT(p.first_name,' ',p.last_name) AS patient_name,
+
+  ROUND(SUM(tn.revenue_tl), 2)       AS hasta_tedavi_tl,
+  COUNT(*)                            AS hasta_muayene_sayisi
+
+FROM (
+  SELECT
+    t.id,
+    t.patient_id,
+    t.doctor_id,
+    t.clinic_id,
+    COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts,
+    round((t.unit_price * t.rate), 2) AS revenue_tl
+  FROM treatments t
+  WHERE t.is_deleted     = 0
+    AND t.is_done        = 1
+    AND t.is_examination = 0
+    AND t.treatment_type = 3
+) tn
+JOIN users    u ON u.id = tn.doctor_id AND u.is_active = 1 AND u.isDeleted = 0 AND u.user_type = 1
+LEFT JOIN clinics  c ON c.id = tn.clinic_id
+LEFT JOIN patients p ON p.id = tn.patient_id
+WHERE tn.service_ts >= :start_dt
+  AND tn.service_ts <  :end_next_dt
+  AND (:clinic_id IS NULL OR tn.clinic_id = :clinic_id)
+  AND (:doctor_id IS NULL OR u.id = :doctor_id)
+GROUP BY
+  u.id, doctor_name,
+  c.id, c.clinic_name,
+  tn.patient_id, patient_name
+ORDER BY doctor_name, clinic_name, hasta_tedavi_tl DESC, patient_name;

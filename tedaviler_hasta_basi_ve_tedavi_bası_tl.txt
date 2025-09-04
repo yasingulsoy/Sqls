@@ -1,0 +1,46 @@
+/* Parametreler:
+  :start_dt     -- 'YYYY-MM-01 00:00:00'
+  :end_next_dt  -- bir sonraki ayın 1'i 00:00 (üst sınır hariç)
+  :clinic_id    -- NULL = tüm klinikler; tek şube için id ver
+  :doctor_id    -- NULL = tüm hekimler; tek hekim için id ver
+*/
+
+SELECT
+  u.id                            AS doctor_id,
+  CONCAT(u.first_name,' ',u.last_name) AS doctor_name,
+  c.id                            AS clinic_id,
+  c.clinic_name,
+
+  /* toplam ciro (TL) */
+  ROUND(SUM(tn.revenue_tl), 2)            AS tedavi_toplam_tl,
+
+  /* hacimler */
+    COUNT(DISTINCT tn.patient_id)            AS hasta_sayisi,           -- benzersiz hasta
+  COUNT(*)                                 AS tedavi_sayisi,         -- yapılan tedavi sayısı
+
+
+  /* oranlar */
+  ROUND(SUM(tn.revenue_tl)/NULLIF(COUNT(DISTINCT tn.patient_id),0), 2) AS hasta_basi_tl,
+  ROUND(SUM(tn.revenue_tl)/NULLIF(COUNT(*),0),                    2) AS tedavi_basi_tl
+FROM (
+  SELECT
+    t.id,
+    t.patient_id,
+    t.doctor_id,
+    t.clinic_id,
+    COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts,
+ 	round((t.unit_price * t.rate), 2) AS revenue_tl
+  FROM treatments t
+  WHERE t.is_deleted     = 0
+    AND t.is_done        = 1
+    AND t.is_examination = 0
+    AND t.treatment_type = 3
+) tn
+JOIN users   u ON u.id = tn.doctor_id AND u.is_active = 1 AND u.isDeleted = 0 AND u.user_type = 1
+LEFT JOIN clinics c ON c.id = tn.clinic_id
+WHERE tn.service_ts >= :start_dt
+  AND tn.service_ts <  :end_next_dt
+  AND (:clinic_id IS NULL OR tn.clinic_id = :clinic_id)
+  AND (:doctor_id IS NULL OR u.id = :doctor_id)
+GROUP BY u.id, doctor_name, c.id, c.clinic_name
+ORDER BY hasta_basi_tl DESC, tedavi_basi_tl DESC, tedavi_toplam_tl DESC, doctor_name, clinic_name;

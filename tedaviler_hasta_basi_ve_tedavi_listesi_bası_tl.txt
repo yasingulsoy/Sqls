@@ -1,0 +1,53 @@
+/* Parametreler:
+  :start_dt     -- 'YYYY-MM-01 00:00:00'
+  :end_next_dt  -- bir sonraki ayın 1'i 00:00:00 (üst sınır HARIÇ)
+  :clinic_id    -- NULL = tüm klinikler; tek şube id verilebilir
+  :doctor_id    -- NULL = tüm hekimler; tek hekim id verilebilir
+  :cat_id       -- opsiyonel; belirli kategori (price_group_categories.id)
+  :subcat_id    -- opsiyonel; belirli alt kategori (price_group_subcategories.id)
+*/
+
+SELECT
+  x.procedure_name,                                                -- *** yalnız prosedür adına göre grup ***
+  GROUP_CONCAT(DISTINCT pgc.cat_name ORDER BY pgc.cat_name SEPARATOR ', ')        AS kategori_adlari,
+  GROUP_CONCAT(DISTINCT IFNULL(pgsc.subcat_name,'—') ORDER BY pgsc.subcat_name SEPARATOR ', ')
+                                                                   AS alt_kategori_adlari,
+
+  COUNT(*)                                                         AS tedavi_sayisi,
+  COUNT(DISTINCT x.patient_id)                                     AS hasta_sayisi,
+
+  ROUND(SUM(x.revenue_tl), 2)                                      AS toplam_tl,
+  ROUND(SUM(x.revenue_tl)/NULLIF(COUNT(*),0), 2)                   AS tedavi_basi_tl,
+  ROUND(SUM(x.revenue_tl)/NULLIF(COUNT(DISTINCT x.patient_id),0),2)AS hasta_basi_tl
+
+FROM (
+  SELECT
+    t.id,
+    t.patient_id,
+    t.doctor_id,
+    t.clinic_id,
+    t.procedure_id,
+    t.procedure_name,
+    COALESCE(NULLIF(t.updated_on,'0000-00-00 00:00:00'), t.saved_on) AS service_ts,
+    ROUND(t.unit_price * t.rate, 2) AS revenue_tl
+  FROM treatments t
+  WHERE t.is_deleted     = 0
+    AND t.is_done        = 1
+    AND t.treatment_type = 3
+) x
+JOIN price_group_category_treatments pgct
+  ON pgct.id = x.procedure_id AND pgct.is_deleted = 0
+LEFT JOIN price_group_categories pgc
+  ON pgc.id = pgct.catid AND pgc.is_deleted = 0
+LEFT JOIN price_group_subcategories pgsc
+  ON pgsc.id = pgct.subcatid AND pgsc.is_deleted = 0
+
+WHERE x.service_ts >= :start_dt
+  AND x.service_ts <  :end_next_dt
+  AND (:clinic_id IS NULL OR x.clinic_id = :clinic_id)
+  AND (:doctor_id IS NULL OR x.doctor_id = :doctor_id)
+  AND (:cat_id    IS NULL OR pgct.catid    = :cat_id)
+  AND (:subcat_id IS NULL OR pgct.subcatid = :subcat_id)
+
+GROUP BY x.procedure_name
+ORDER BY toplam_tl DESC, tedavi_sayisi DESC, x.procedure_name;
