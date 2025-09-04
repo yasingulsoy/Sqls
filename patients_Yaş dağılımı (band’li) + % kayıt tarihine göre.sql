@@ -1,33 +1,39 @@
-SELECT x.yas_bandi, x.cnt,
-       ROUND(100.0 * x.cnt / NULLIF(t.total,0), 2) AS pct
+/* Parametreler:
+   :start_dt, :end_next_dt           -- kayıt tarihi aralığı [başlangıç, üst sınır hariç]
+   :clinic_id                        -- NULL = tüm klinikler
+   :asof_date                        -- opsiyonel; verilmezse CURDATE() kullanılır
+*/
+SELECT 
+  x.yas_bandi,
+  x.cnt,
+  ROUND(100.0 * x.cnt / NULLIF(t.total,0), 2) AS pct
 FROM (
   SELECT
     CASE
-      WHEN p.birthday IS NULL OR p.birthday='0000-00-00' THEN 'Bilinmiyor'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) < 13 THEN '0–12'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 13 AND 17 THEN '13–17'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 18 AND 24 THEN '18–24'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 25 AND 34 THEN '25–34'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 35 AND 44 THEN '35–44'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 45 AND 54 THEN '45–54'
-      WHEN TIMESTAMPDIFF(YEAR, p.birthday, DATE(:end_next_dt) - INTERVAL 1 DAY) BETWEEN 55 AND 64 THEN '55–64'
+      WHEN p.birthday IS NULL OR p.birthday = '0000-00-00' THEN 'Bilinmiyor'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) < 13 THEN '0–12'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 13 AND 17 THEN '13–17'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 18 AND 24 THEN '18–24'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 25 AND 34 THEN '25–34'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 35 AND 44 THEN '35–44'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 45 AND 54 THEN '45–54'
+      WHEN TIMESTAMPDIFF(YEAR, p.birthday, COALESCE(DATE(:asof_date), CURDATE())) BETWEEN 55 AND 64 THEN '55–64'
       ELSE '65+'
     END AS yas_bandi,
     COUNT(*) AS cnt
   FROM patients p
   WHERE p.isDeleted = 0
-    AND (:has_start_date = 0 OR p.saved_on >= :start_date)
+  AND (:has_start_date = 0 OR p.saved_on >= :start_date)
     AND (:has_end_date   = 0 OR p.saved_on <= :end_date)
     AND (:has_clinic_id  = 0 OR p.clinic_id IN (:clinic_id))
-
   GROUP BY yas_bandi
 ) x
 CROSS JOIN (
   SELECT COUNT(*) AS total
   FROM patients p
   WHERE p.isDeleted = 0
-    AND (:has_start_date = 0 OR p.saved_on >= :start_date)
+  AND (:has_start_date = 0 OR p.saved_on >= :start_date)
     AND (:has_end_date   = 0 OR p.saved_on <= :end_date)
-    AND (:has_clinic_id  = 0 OR p.clinic_id IN (:clinic_id))
+     AND (:has_clinic_id  = 0 OR p.clinic_id IN (:clinic_id))
 ) t
 ORDER BY FIELD(x.yas_bandi,'0–12','13–17','18–24','25–34','35–44','45–54','55–64','65+','Bilinmiyor');
